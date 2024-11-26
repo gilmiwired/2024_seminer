@@ -1,5 +1,3 @@
-# diffusion_model_demo.py の修正後
-
 import math
 import os
 import torch
