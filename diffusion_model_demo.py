@@ -1,4 +1,5 @@
 import math
+import os
 import torch
 import torchvision
 from torch import nn
@@ -16,6 +17,9 @@ num_timesteps = 1000  # 拡散過程のタイムステップ数
 epochs = 30           # エポック数
 lr = 1e-3             # 学習率
 device = 'cuda' if torch.cuda.is_available() else 'cpu'  # デバイスの設定
+
+model_dir = 'saved_model'
+os.makedirs(model_dir, exist_ok=True)
 
 # 画像をグリッド状に表示する関数
 def show_images(images, rows=2, cols=10):
@@ -212,65 +216,62 @@ class Diffuser:
         images = [self.reverse_to_img(x[i]) for i in range(batch_size)]
         return images
 
-# Fashion-MNISTデータセットの読み込みと前処理
-preprocess = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.5,), (0.5,))  # 画像を [-1, 1] に正規化
-])
-dataset = torchvision.datasets.FashionMNIST(root='./data', download=True, transform=preprocess)
-dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+if __name__ == "__main__":
+    # Fashion-MNISTデータセットの読み込みと前処理
+    preprocess = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,), (0.5,))  # 画像を [-1, 1] に正規化
+    ])
+    dataset = torchvision.datasets.FashionMNIST(root='./data', download=True, transform=preprocess)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-# データセットからサンプル画像を表示
-data_iter = iter(dataloader)
-images, labels = next(data_iter)
-show_images(images[:20], rows=2, cols=10)
+    # データセットからサンプル画像を表示
+    data_iter = iter(dataloader)
+    images, labels = next(data_iter)
+    show_images(images[:20], rows=2, cols=10)
 
-# モデルとオプティマイザの定義
-model = UNet(in_ch=1, time_embed_dim=100).to(device)
-optimizer = Adam(model.parameters(), lr=lr)
-diffuser = Diffuser(num_timesteps=num_timesteps, device=device)
+    # モデルとオプティマイザの定義
+    model = UNet(in_ch=1, time_embed_dim=100).to(device)
+    optimizer = Adam(model.parameters(), lr=lr)
+    diffuser = Diffuser(num_timesteps=num_timesteps, device=device)
 
-# 学習ループ
-losses = []
-for epoch in range(epochs):
-    epoch_loss = 0
-    for images, _ in tqdm(dataloader):
-        images = images.to(device)
-        N = images.size(0)
-        # 各バッチに対してランダムなタイムステップをサンプリング
-        t = torch.randint(1, num_timesteps + 1, (N,), device=device, dtype=torch.long)
-        # タイムステップ t で画像にノイズを追加
-        x_t, noise = diffuser.add_noise(images, t)
-        optimizer.zero_grad()
-        # モデルを使用して追加されたノイズを予測
-        noise_pred = model(x_t, t)
-        # 真のノイズと予測されたノイズとの間の損失を計算（平均二乗誤差）
-        loss = F.mse_loss(noise_pred, noise)
-        # バックプロパゲーション
-        loss.backward()
-        optimizer.step()
-        epoch_loss += loss.item()
-    avg_loss = epoch_loss / len(dataloader)
-    print(f'Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}')
-    losses.append(avg_loss)
+    # 学習ループ
+    losses = []
+    for epoch in range(epochs):
+        epoch_loss = 0
+        for images, _ in tqdm(dataloader):
+            images = images.to(device)
+            N = images.size(0)
+            # 各バッチに対してランダムなタイムステップをサンプリング
+            t = torch.randint(1, num_timesteps + 1, (N,), device=device, dtype=torch.long)
+            # タイムステップ t で画像にノイズを追加
+            x_t, noise = diffuser.add_noise(images, t)
+            optimizer.zero_grad()
+            # モデルを使用して追加されたノイズを予測
+            noise_pred = model(x_t, t)
+            # 真のノイズと予測されたノイズとの間の損失を計算（平均二乗誤差）
+            loss = F.mse_loss(noise_pred, noise)
+            # バックプロパゲーション
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item()
+        avg_loss = epoch_loss / len(dataloader)
+        print(f'Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}')
+        losses.append(avg_loss)
 
-    # 10エポックごとにモデルを保存
-    if (epoch + 1) % 10 == 0:
-        torch.save(model.state_dict(), f'model_epoch_{epoch+1}.pth')
-        print(f'エポック {epoch+1} でモデルを保存しました')
+        # 10エポックごとにモデルを保存
+        if (epoch + 1) % 10 == 0:
+            torch.save(model.state_dict(), f'{model_dir}/model_epoch_{epoch+1}.pth')
+            print(f'エポック {epoch+1} でモデルを保存しました')
 
-# 最終的なモデルを保存
-torch.save(model.state_dict(), 'trained_unet_model.pth')
-print('最終的なモデルを trained_unet_model.pth として保存しました')
+    # 学習損失のプロット
+    plt.plot(range(1, epochs + 1), losses)
+    plt.xlabel('エポック')
+    plt.ylabel('損失')
+    plt.title('学習損失')
+    plt.show()
 
-# 学習損失のプロット
-plt.plot(range(1, epochs + 1), losses)
-plt.xlabel('エポック')
-plt.ylabel('損失')
-plt.title('学習損失')
-plt.show()
-
-# 訓練されたモデルを使用して画像を生成
-generated_images = diffuser.sample(model, x_shape=(20, 1, 28, 28))
-# 生成された画像を表示
-show_images(torch.stack([transforms.ToTensor()(img) for img in generated_images]), rows=2, cols=10)
+    # 訓練されたモデルを使用して画像を生成
+    generated_images = diffuser.sample(model, x_shape=(20, 1, 28, 28))
+    # 生成された画像を表示
+    show_images(torch.stack([transforms.ToTensor()(img) for img in generated_images]), rows=2, cols=10)
